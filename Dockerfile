@@ -3,7 +3,7 @@
 # Multi-stage build: a wheel is built once, then installed into a slim runtime
 # image that carries no build toolchain and runs as an unprivileged user.
 
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /src
 RUN pip install --no-cache-dir build
@@ -13,7 +13,7 @@ COPY fwcopilot ./fwcopilot
 RUN python -m build --wheel --outdir /dist
 
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 LABEL org.opencontainers.image.title="fwcopilot" \
       org.opencontainers.image.description="Firmware engineering assistant with board and datasheet context" \
