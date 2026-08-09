@@ -141,11 +141,14 @@ class TestRegisterExtraction:
 
 
 class TestPartNumberGuess:
-    @pytest.mark.parametrize("filename,expected", [
-        ("bme280-datasheet.pdf", "BME280"),
-        ("W25Q128JV_DS_Rev_H.pdf", "W25Q128JV"),
-        ("lsm6dsox.pdf", "LSM6DSOX"),
-    ])
+    @pytest.mark.parametrize(
+        "filename,expected",
+        [
+            ("bme280-datasheet.pdf", "BME280"),
+            ("W25Q128JV_DS_Rev_H.pdf", "W25Q128JV"),
+            ("lsm6dsox.pdf", "LSM6DSOX"),
+        ],
+    )
     def test_from_filename(self, filename, expected):
         assert guess_part_number(filename, []) == expected
 

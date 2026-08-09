@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Generator, Iterator, List, Optional
 
 import anthropic
 
@@ -59,7 +59,7 @@ class Session:
         return self.cfg.sessions_dir / f"{self.id}.json"
 
     @classmethod
-    def load(cls, cfg: Config, session_id: str) -> "Session":
+    def load(cls, cfg: Config, session_id: str) -> Session:
         session = cls(cfg, session_id)
         if session.path.is_file():
             data = json.loads(session.path.read_text(encoding="utf-8"))
@@ -68,15 +68,19 @@ class Session:
         return session
 
     @classmethod
-    def latest(cls, cfg: Config) -> Optional["Session"]:
+    def latest(cls, cfg: Config) -> Optional[Session]:
         files = sorted(cfg.sessions_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
         return cls.load(cfg, files[-1].stem) if files else None
 
     def save(self) -> None:
         self.path.write_text(
             json.dumps(
-                {"id": self.id, "created": self.created, "updated": time.time(),
-                 "messages": self.messages},
+                {
+                    "id": self.id,
+                    "created": self.created,
+                    "updated": time.time(),
+                    "messages": self.messages,
+                },
                 indent=2,
             ),
             encoding="utf-8",
@@ -143,7 +147,7 @@ class Agent:
         return self._system
 
     # ---- the turn ------------------------------------------------------
-    def stream_turn(self, user_message: str) -> Iterator[Event]:
+    def stream_turn(self, user_message: str) -> Generator[Event, None, None]:
         """Run one user turn to completion, yielding events as they happen."""
         self.session.messages.append({"role": "user", "content": user_message})
         self.session.trim()
@@ -180,7 +184,7 @@ class Agent:
                 yield Event(
                     "error",
                     text=f"The request was declined by safety classifiers"
-                         f"{f' ({category})' if category else ''}. Try rephrasing.",
+                    f"{f' ({category})' if category else ''}. Try rephrasing.",
                 )
                 self.session.save()
                 return
@@ -207,16 +211,20 @@ class Agent:
                     text=result.summary or (result.text[:160] if result.is_error else ""),
                     data={"is_error": result.is_error},
                 )
-                results.append({
-                    "type": "tool_result",
-                    "tool_use_id": call.get("id"),
-                    "content": result.text or "(no output)",
-                    "is_error": result.is_error,
-                })
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call.get("id"),
+                        "content": result.text or "(no output)",
+                        "is_error": result.is_error,
+                    }
+                )
             self.session.messages.append({"role": "user", "content": results})
             self.session.save()
 
-        yield Event("error", text=f"Stopped after {MAX_TOOL_ITERATIONS} tool rounds without finishing.")
+        yield Event(
+            "error", text=f"Stopped after {MAX_TOOL_ITERATIONS} tool rounds without finishing."
+        )
 
     def _request_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {
@@ -232,8 +240,12 @@ class Agent:
             kwargs["output_config"] = {"effort": self.cfg.effort}
         return kwargs
 
-    def _stream_once(self) -> Iterator[Event]:
-        """Stream one assistant message; returns the final Message object."""
+    def _stream_once(self) -> Generator[Event, None, Any]:
+        """Stream one assistant message.
+
+        Yields Events as they arrive and *returns* the final Message, which the
+        caller picks up with `response = yield from self._stream_once()`.
+        """
         kwargs = self._request_kwargs()
 
         if self.use_fallbacks:
@@ -263,7 +275,7 @@ class Agent:
                 delta = getattr(event, "delta", None)
                 dtype = getattr(delta, "type", "")
                 if dtype == "text_delta":
-                    yield Event("text_delta", text=delta.text)
+                    yield Event("text_delta", text=getattr(delta, "text", ""))
                 elif dtype == "thinking_delta":
                     yield Event("thinking_delta", text=getattr(delta, "thinking", ""))
             elif etype == "content_block_start":

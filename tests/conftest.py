@@ -5,8 +5,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fwcopilot.config import init_workspace  # noqa: E402
-from fwcopilot.store import Store  # noqa: E402
+from fwcopilot.config import init_workspace
+from fwcopilot.store import Store
 
 SAMPLE_DATASHEET = """\
 ACME1234 Digital Pressure Sensor
@@ -117,7 +117,9 @@ def workspace(tmp_path):
 
     (root / "src" / "main.c").write_text(SAMPLE_MAIN_C, encoding="utf-8")
     (root / "app.ld").write_text(SAMPLE_LD, encoding="utf-8")
-    (root / "Makefile").write_text("CC := arm-none-eabi-gcc\nall:\n\t$(CC) -c src/main.c\n", encoding="utf-8")
+    (root / "Makefile").write_text(
+        "CC := arm-none-eabi-gcc\nall:\n\t$(CC) -c src/main.c\n", encoding="utf-8"
+    )
     (root / "datasheets" / "acme1234.txt").write_text(SAMPLE_DATASHEET, encoding="utf-8")
 
     cfg = init_workspace(root, "sensor-node-fw")

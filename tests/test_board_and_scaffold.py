@@ -81,7 +81,7 @@ class TestScaffold:
         board = load_board(workspace.board_path)
         files = dict(generate(board, "drivers-only"))
         header = files["board_pins.h"]
-        assert '#define PIN_I2C1_SCL' in header and '"PB6"' in header
+        assert "#define PIN_I2C1_SCL" in header and '"PB6"' in header
         assert "#define ACME1234_I2C_ADDR         0x76u" in header
         assert "#define BOARD_SYSCLK_HZ       100000000u" in header
         assert "#define BOARD_FLASH_BYTES     (512u * 1024u)" in header
@@ -143,7 +143,7 @@ class TestScaffold:
             generate(board, "arduino-mega")
 
     def test_generate_requires_a_board_profile(self, tmp_path):
-        with pytest.raises(ValueError, match="board.yaml"):
+        with pytest.raises(ValueError, match=r"board\.yaml"):
             generate(load_board(tmp_path / "missing.yaml"), "cmsis-bare")
 
     def test_write_files_never_clobbers_without_force(self, workspace, tmp_path):

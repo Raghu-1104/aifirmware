@@ -15,7 +15,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
@@ -137,8 +137,12 @@ def build_match_query(query: str) -> str:
             continue
         terms.append('"' + token + '"')
     # Deduplicate, preserving order.
-    seen = set()
-    unique = [t for t in terms if not (t in seen or seen.add(t))]
+    seen: Set[str] = set()
+    unique: List[str] = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            unique.append(term)
     return " OR ".join(unique)
 
 
@@ -157,7 +161,7 @@ class Store:
     def close(self) -> None:
         self.conn.close()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> Store:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -177,7 +181,8 @@ class Store:
         if not row:
             return
         chunk_ids = [
-            r["id"] for r in self.conn.execute("SELECT id FROM chunks WHERE doc_id = ?", (row["id"],))
+            r["id"]
+            for r in self.conn.execute("SELECT id FROM chunks WHERE doc_id = ?", (row["id"],))
         ]
         for cid in chunk_ids:
             self.conn.execute("DELETE FROM chunk_fts WHERE rowid = ?", (cid,))
@@ -203,6 +208,7 @@ class Store:
             (kind, path, title, component, part, pages, sha, mtime, time.time()),
         )
         self.conn.commit()
+        assert cur.lastrowid is not None  # INSERT always sets it
         return int(cur.lastrowid)
 
     def list_docs(self, kind: Optional[str] = None) -> List[sqlite3.Row]:
@@ -231,8 +237,14 @@ class Store:
             cur = self.conn.execute(
                 "INSERT INTO chunks (doc_id, page, line, end_line, heading, text)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                (doc_id, ch.get("page"), ch.get("line"), ch.get("end_line"),
-                 ch.get("heading"), text),
+                (
+                    doc_id,
+                    ch.get("page"),
+                    ch.get("line"),
+                    ch.get("end_line"),
+                    ch.get("heading"),
+                    text,
+                ),
             )
             self.conn.execute(
                 "INSERT INTO chunk_fts (rowid, text, heading) VALUES (?, ?, ?)",
@@ -242,13 +254,21 @@ class Store:
         self.conn.commit()
         return count
 
-    def add_registers(self, doc_id: int, part: Optional[str], regs: Sequence[Dict[str, Any]]) -> int:
+    def add_registers(
+        self, doc_id: int, part: Optional[str], regs: Sequence[Dict[str, Any]]
+    ) -> int:
         for reg in regs:
             self.conn.execute(
                 "INSERT INTO registers (doc_id, part, name, address, page, description)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                (doc_id, part, reg.get("name"), reg.get("address"),
-                 reg.get("page"), reg.get("description")),
+                (
+                    doc_id,
+                    part,
+                    reg.get("name"),
+                    reg.get("address"),
+                    reg.get("page"),
+                    reg.get("description"),
+                ),
             )
         self.conn.commit()
         return len(regs)
@@ -299,10 +319,18 @@ class Store:
         for r in rows:
             hits.append(
                 Hit(
-                    chunk_id=r["chunk_id"], doc_id=r["doc_id"], kind=r["kind"],
-                    path=r["path"], title=r["title"] or "", part=r["part"],
-                    component=r["component"], page=r["page"], line=r["line"],
-                    end_line=r["end_line"], heading=r["heading"], text=r["text"],
+                    chunk_id=r["chunk_id"],
+                    doc_id=r["doc_id"],
+                    kind=r["kind"],
+                    path=r["path"],
+                    title=r["title"] or "",
+                    part=r["part"],
+                    component=r["component"],
+                    page=r["page"],
+                    line=r["line"],
+                    end_line=r["end_line"],
+                    heading=r["heading"],
+                    text=r["text"],
                     # bm25() returns lower-is-better; flip it so higher is better.
                     score=-float(r["rank"]),
                 )
@@ -318,7 +346,9 @@ class Store:
     def find_registers(
         self, name_or_addr: str, part: Optional[str] = None, limit: int = 20
     ) -> List[sqlite3.Row]:
-        sql = ["SELECT r.*, d.title, d.path FROM registers r JOIN docs d ON d.id = r.doc_id WHERE 1=1"]
+        sql = [
+            "SELECT r.*, d.title, d.path FROM registers r JOIN docs d ON d.id = r.doc_id WHERE 1=1"
+        ]
         params: List[Any] = []
         if name_or_addr:
             sql.append("AND (r.name LIKE ? OR r.address LIKE ?)")

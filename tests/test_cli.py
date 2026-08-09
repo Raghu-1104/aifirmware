@@ -1,11 +1,9 @@
 """End-to-end CLI behaviour (everything except the model call)."""
 
-import os
-from pathlib import Path
-
 import pytest
 
 from fwcopilot.cli import main
+from fwcopilot.errors import ExitCode
 
 
 @pytest.fixture()
@@ -36,10 +34,10 @@ class TestInitAndIndex:
 
     def test_commands_fail_clearly_outside_a_workspace(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
-        with pytest.raises(SystemExit) as exc:
-            run("status")
-        assert exc.value.code == 1
-        assert "fwcopilot init" in capsys.readouterr().err
+        assert run("status") == ExitCode.NO_WORKSPACE
+        err = capsys.readouterr().err
+        assert "no fwcopilot workspace found" in err
+        assert "fwcopilot init" in err  # the hint, not just the failure
 
     def test_workspace_is_found_from_a_subdirectory(self, project, monkeypatch):
         run("init", ".")
@@ -147,6 +145,136 @@ class TestScaffoldCommand:
         run("scaffold", "--target", "drivers-only", "--out", str(out_dir))
         assert (out_dir / "board_pins.h").read_text() == "/* mine */"
         assert "skip" in capsys.readouterr().out
+
+
+class TestLintCommand:
+    def _buggy(self, project):
+        (project / "src" / "isr.c").write_text(
+            "uint32_t g_count;\n"
+            "void TIM2_IRQHandler(void)\n{\n    g_count++;\n    HAL_Delay(1);\n}\n",
+            encoding="utf-8",
+        )
+
+    def test_reports_findings_and_exits_nonzero(self, project, capsys):
+        run("init", ".")
+        self._buggy(project)
+        assert run("lint") == ExitCode.FINDINGS
+        out = capsys.readouterr().out
+        assert "FW001" in out and "src/isr.c" in out
+
+    def test_clean_project_exits_zero(self, project, capsys):
+        run("init", ".")
+        assert run("lint") == 0
+        assert "No findings" in capsys.readouterr().out
+
+    def test_json_output_is_machine_readable(self, project, capsys):
+        import json
+
+        run("init", ".")
+        self._buggy(project)
+        capsys.readouterr()  # discard init output; the JSON must stand alone
+        run("lint", "--format", "json")
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["counts"]["error"] >= 1
+        assert payload["findings"][0]["file"].endswith("isr.c")
+
+    def test_explain_documents_a_rule(self, project, capsys):
+        run("init", ".")
+        assert run("lint", "--explain", "FW001") == 0
+        assert "interrupt handler" in capsys.readouterr().out.lower()
+
+    def test_path_filter(self, project, capsys):
+        run("init", ".")
+        self._buggy(project)
+        assert run("lint", "--path", "docs") == 0  # nothing under docs/
+
+
+class TestSizeCommand:
+    def test_reports_missing_artifacts(self, project, capsys):
+        run("init", ".")
+        assert run("size") == ExitCode.NOT_FOUND
+        assert "no build artifacts" in capsys.readouterr().err
+
+    def test_reads_a_linker_map(self, project, capsys):
+        run("init", ".")
+        (project / "board.yaml").write_text(
+            "board: {name: b}\nmcu: {part: X, flash_kb: 512, ram_kb: 128}\n", encoding="utf-8"
+        )
+        (project / "build").mkdir(exist_ok=True)
+        (project / "build" / "fw.map").write_text(
+            "Memory Configuration\n\n"
+            "Name             Origin             Length             Attributes\n"
+            "FLASH            0x08000000         0x00080000         xr\n"
+            "RAM              0x20000000         0x00020000         xrw\n\n"
+            "Linker script and memory map\n\n"
+            " .text.main     0x08000000      0x400 build/main.o\n"
+            " .bss.buf       0x20000000      0x800 build/main.o\n",
+            encoding="utf-8",
+        )
+        assert run("size") == 0
+        out = capsys.readouterr().out
+        assert "Memory budget" in out and "build/main.o" in out
+
+
+class TestRegsCommand:
+    def test_lists_parts(self, project, capsys):
+        run("init", ".")
+        (project / "datasheets" / "acme.txt").write_text(
+            "ACME1234\nCTRL_MEAS 0xF4 R/W Oversampling\nCHIP_ID 0xD0 R Identity\n",
+            encoding="utf-8",
+        )
+        run("index")
+        capsys.readouterr()
+        assert run("regs", "--list") == 0
+        assert "ACME1234" in capsys.readouterr().out
+
+    def test_generates_a_header_file(self, project, capsys):
+        run("init", ".")
+        (project / "datasheets" / "acme.txt").write_text(
+            "ACME1234\nCTRL_MEAS 0xF4 R/W Oversampling\n", encoding="utf-8"
+        )
+        run("index")
+        assert run("regs", "ACME1234", "--out", "drivers/acme_regs.h") == 0
+        header = (project / "drivers" / "acme_regs.h").read_text()
+        assert "#define ACME1234_REG_CTRL_MEAS" in header and "0xF4u" in header
+
+    def test_unknown_part_is_reported(self, project, capsys):
+        run("init", ".")
+        run("index")
+        assert run("regs", "NOSUCHPART") == ExitCode.NOT_FOUND
+
+
+class TestDoctorCommand:
+    def test_runs_and_reports(self, project, capsys):
+        run("init", ".")
+        run("index")
+        capsys.readouterr()
+        code = run("doctor")
+        out = capsys.readouterr().out
+        assert "fwcopilot doctor" in out
+        assert "workspace" in out
+        assert code in (0, ExitCode.FINDINGS)
+
+
+class TestBuildCommand:
+    def test_requires_configuration(self, project, capsys):
+        run("init", ".")
+        assert run("build") == ExitCode.ERROR
+        assert "no build command configured" in capsys.readouterr().err
+
+    def test_parses_diagnostics_from_a_failing_build(self, project, capsys):
+        run("init", ".")
+        cfg_path = project / ".fwcopilot" / "config.yaml"
+        cfg_path.write_text(
+            cfg_path.read_text().replace(
+                "  command: null",
+                "  command: \"echo 'src/main.c:42:9: error: x undeclared' >&2; exit 1\"",
+            ),
+            encoding="utf-8",
+        )
+        assert run("build") == ExitCode.ERROR
+        out = capsys.readouterr().out
+        assert "src/main.c:42" in out and "1 error" in out
 
 
 class TestStatus:

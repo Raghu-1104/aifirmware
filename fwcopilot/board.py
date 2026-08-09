@@ -148,12 +148,14 @@ class BoardProfile:
         for raw in self.data.get("components") or []:
             if not isinstance(raw, dict):
                 continue
+            raw_bus = raw.get("bus")
+            bus: Dict[str, Any] = raw_bus if isinstance(raw_bus, dict) else {}
             out.append(
                 Component(
                     ref=str(raw.get("ref") or raw.get("designator") or raw.get("part") or "?"),
                     part=str(raw.get("part") or ""),
                     role=str(raw.get("role") or raw.get("description") or ""),
-                    bus=raw.get("bus") if isinstance(raw.get("bus"), dict) else {},
+                    bus=bus,
                     datasheet=raw.get("datasheet"),
                     notes=str(raw.get("notes") or ""),
                 )
@@ -195,8 +197,13 @@ class BoardProfile:
         mcu = self.mcu
         if mcu:
             mcu_bits = [str(mcu.get("part", "unknown MCU"))]
-            for key, label in (("core", ""), ("clock_hz", "Hz"), ("flash_kb", "KB flash"),
-                               ("ram_kb", "KB RAM"), ("package", "")):
+            for key, label in (
+                ("core", ""),
+                ("clock_hz", "Hz"),
+                ("flash_kb", "KB flash"),
+                ("ram_kb", "KB RAM"),
+                ("package", ""),
+            ):
                 if mcu.get(key) is not None:
                     value = mcu[key]
                     if key == "clock_hz":
@@ -225,7 +232,9 @@ class BoardProfile:
                 for pin in pins:
                     lines.append(f"  - {_fmt_pin(pin)}")
             else:
-                lines.append(f"- Pin map: {len(pins)} pins defined (use get_board_profile for the full map)")
+                lines.append(
+                    f"- Pin map: {len(pins)} pins defined (use get_board_profile for the full map)"
+                )
         return "\n".join(lines)
 
     # ---- validation ----------------------------------------------------
@@ -248,11 +257,10 @@ class BoardProfile:
                 problems.append(
                     f"{comp.ref} references bus '{comp.bus_name}' which is not declared under `buses`"
                 )
-            if comp.datasheet and root is not None:
-                if not (root / comp.datasheet).is_file():
-                    problems.append(
-                        f"{comp.ref} ({comp.part}): datasheet '{comp.datasheet}' not found on disk"
-                    )
+            if comp.datasheet and root is not None and not (root / comp.datasheet).is_file():
+                problems.append(
+                    f"{comp.ref} ({comp.part}): datasheet '{comp.datasheet}' not found on disk"
+                )
             if comp.address is not None and comp.bus_name:
                 key = f"{comp.bus_name}:{_fmt_addr(comp.address)}"
                 if key in i2c_addresses:

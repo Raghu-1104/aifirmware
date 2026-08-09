@@ -16,21 +16,70 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from . import DEFAULT_MODEL
+from .errors import ConfigError, WorkspaceNotFoundError
 
 STATE_DIR = ".fwcopilot"
+VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+VALID_PERMISSIONS = ("allow", "ask", "deny")
+MIN_MAX_TOKENS = 1024
+MAX_MAX_TOKENS = 128000
+
+#: Environment overrides, applied after the config file is read. Useful for
+#: containers and CI, where editing a YAML file in the image is awkward.
+ENV_OVERRIDES = {
+    "FWCOPILOT_MODEL": "model",
+    "FWCOPILOT_EFFORT": "effort",
+    "FWCOPILOT_MAX_TOKENS": "max_tokens",
+    "FWCOPILOT_BUILD_COMMAND": "build_command",
+    "FWCOPILOT_FLASH_COMMAND": "flash_command",
+    "FWCOPILOT_BOARD_FILE": "board_file",
+    "FWCOPILOT_DATASHEET_DIR": "datasheet_dir",
+}
 
 DEFAULT_SOURCE_GLOBS = [
-    "**/*.c", "**/*.h", "**/*.cpp", "**/*.hpp", "**/*.cc", "**/*.ino",
-    "**/*.s", "**/*.S", "**/*.ld", "**/*.dts", "**/*.dtsi", "**/*.overlay",
-    "**/Kconfig*", "**/CMakeLists.txt", "**/*.cmake", "**/Makefile", "**/*.mk",
-    "**/platformio.ini", "**/prj.conf", "**/sdkconfig*", "**/*.rs",
+    "**/*.c",
+    "**/*.h",
+    "**/*.cpp",
+    "**/*.hpp",
+    "**/*.cc",
+    "**/*.ino",
+    "**/*.s",
+    "**/*.S",
+    "**/*.ld",
+    "**/*.dts",
+    "**/*.dtsi",
+    "**/*.overlay",
+    "**/Kconfig*",
+    "**/CMakeLists.txt",
+    "**/*.cmake",
+    "**/Makefile",
+    "**/*.mk",
+    "**/platformio.ini",
+    "**/prj.conf",
+    "**/sdkconfig*",
+    "**/*.rs",
     "**/*.md",
 ]
 
 DEFAULT_EXCLUDES = [
-    ".git", ".venv", "venv", "node_modules", "build", "cmake-build-debug",
-    ".pio", ".pio/build", "__pycache__", ".fwcopilot", "dist", "out",
-    "Debug", "Release", ".vscode", ".idea", "twister-out", "zephyr/build",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "build",
+    "cmake-build-debug",
+    ".pio",
+    ".pio/build",
+    "__pycache__",
+    ".fwcopilot",
+    "dist",
+    "out",
+    "Debug",
+    "Release",
+    ".vscode",
+    ".idea",
+    "twister-out",
+    "zephyr/build",
 ]
 
 
@@ -49,9 +98,9 @@ class Config:
     excludes: List[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
     build_command: Optional[str] = None
     flash_command: Optional[str] = None
-    permissions: Dict[str, str] = field(
-        default_factory=lambda: {"write": "ask", "build": "ask"}
-    )
+    elf_path: Optional[str] = None
+    map_path: Optional[str] = None
+    permissions: Dict[str, str] = field(default_factory=lambda: {"write": "ask", "build": "ask"})
     raw: Dict[str, Any] = field(default_factory=dict)
 
     # ---- derived paths -------------------------------------------------
@@ -104,20 +153,65 @@ class Config:
         Model-supplied paths are untrusted: this is the single choke point that
         keeps file tools inside the project directory.
         """
-        candidate = (self.root / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
+        candidate = (
+            (self.root / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
+        )
         root = self.root.resolve()
         if candidate != root and root not in candidate.parents:
             raise ValueError(f"path escapes the project root: {path}")
         return candidate
 
     # ---- serialization -------------------------------------------------
+    # ---- validation ----------------------------------------------------
+    def validate(self) -> None:
+        """Fail loudly and specifically on a bad config file."""
+        if not self.model.strip():
+            raise ConfigError("model.id is empty", "Set it to a model id, e.g. claude-opus-5.")
+        if self.effort not in VALID_EFFORTS:
+            raise ConfigError(
+                f"model.effort '{self.effort}' is not valid",
+                f"Choose one of: {', '.join(VALID_EFFORTS)}.",
+            )
+        if not MIN_MAX_TOKENS <= self.max_tokens <= MAX_MAX_TOKENS:
+            raise ConfigError(
+                f"model.max_tokens ({self.max_tokens}) is out of range",
+                f"Use a value between {MIN_MAX_TOKENS} and {MAX_MAX_TOKENS}.",
+            )
+        for key, value in self.permissions.items():
+            if value not in VALID_PERMISSIONS:
+                raise ConfigError(
+                    f"permissions.{key} = '{value}' is not valid",
+                    f"Choose one of: {', '.join(VALID_PERMISSIONS)}.",
+                )
+        if not self.source_globs:
+            raise ConfigError("index.source_globs is empty", "Nothing would ever be indexed.")
+
+    def apply_env_overrides(self, env: Optional[Dict[str, str]] = None) -> None:
+        env = dict(os.environ if env is None else env)
+        for var, attr in ENV_OVERRIDES.items():
+            raw = env.get(var)
+            if raw is None or raw == "":
+                continue
+            if attr == "max_tokens":
+                try:
+                    setattr(self, attr, int(raw))
+                except ValueError as exc:
+                    raise ConfigError(f"{var} must be an integer, got '{raw}'") from exc
+            else:
+                setattr(self, attr, raw)
+
     def to_yaml(self) -> str:
         data = {
             "project": {"name": self.name},
             "model": {"id": self.model, "effort": self.effort, "max_tokens": self.max_tokens},
             "paths": {"datasheets": self.datasheet_dir, "board": self.board_file},
             "index": {"source_globs": self.source_globs, "exclude": self.excludes},
-            "build": {"command": self.build_command, "flash": self.flash_command},
+            "build": {
+                "command": self.build_command,
+                "flash": self.flash_command,
+                "elf": self.elf_path,
+                "map": self.map_path,
+            },
             "permissions": self.permissions,
         }
         return yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
@@ -135,9 +229,8 @@ def find_root(start: Optional[Path] = None) -> Optional[Path]:
 def load_config(start: Optional[Path] = None) -> Config:
     root = find_root(start)
     if root is None:
-        raise FileNotFoundError(
-            "no fwcopilot workspace found here (or in any parent directory).\n"
-            "Run `fwcopilot init` in your firmware project to create one."
+        raise WorkspaceNotFoundError(
+            "no fwcopilot workspace found here (or in any parent directory)"
         )
     return load_config_from_root(root)
 
@@ -147,7 +240,12 @@ def load_config_from_root(root: Path) -> Config:
     cfg_path = root / STATE_DIR / "config.yaml"
     data: Dict[str, Any] = {}
     if cfg_path.is_file():
-        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        try:
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise ConfigError(f"{cfg_path} is not valid YAML: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ConfigError(f"{cfg_path} must contain a YAML mapping at the top level")
 
     project = data.get("project") or {}
     model = data.get("model") or {}
@@ -155,21 +253,32 @@ def load_config_from_root(root: Path) -> Config:
     index = data.get("index") or {}
     build = data.get("build") or {}
 
+    def get(section: Dict[str, Any], key: str, default: Any) -> Any:
+        """Absent or null falls back to the default; an explicitly empty value
+        is kept so `validate()` can report it rather than silently substituting
+        a different setting than the file asks for."""
+        value = section.get(key, default)
+        return default if value is None else value
+
     cfg = Config(
         root=root,
-        name=project.get("name") or root.name,
-        model=model.get("id") or DEFAULT_MODEL,
-        effort=model.get("effort") or "high",
-        max_tokens=int(model.get("max_tokens") or 16000),
-        datasheet_dir=paths.get("datasheets") or "datasheets",
-        board_file=paths.get("board") or "board.yaml",
-        source_globs=index.get("source_globs") or list(DEFAULT_SOURCE_GLOBS),
-        excludes=index.get("exclude") or list(DEFAULT_EXCLUDES),
+        name=get(project, "name", root.name) or root.name,
+        model=get(model, "id", DEFAULT_MODEL),
+        effort=get(model, "effort", "high"),
+        max_tokens=int(get(model, "max_tokens", 16000)),
+        datasheet_dir=get(paths, "datasheets", "datasheets"),
+        board_file=get(paths, "board", "board.yaml"),
+        source_globs=get(index, "source_globs", list(DEFAULT_SOURCE_GLOBS)),
+        excludes=get(index, "exclude", list(DEFAULT_EXCLUDES)),
         build_command=build.get("command"),
         flash_command=build.get("flash"),
+        elf_path=build.get("elf"),
+        map_path=build.get("map"),
         permissions={**{"write": "ask", "build": "ask"}, **(data.get("permissions") or {})},
         raw=data,
     )
+    cfg.apply_env_overrides()
+    cfg.validate()
     return cfg
 
 

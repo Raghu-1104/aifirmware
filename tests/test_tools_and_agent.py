@@ -131,9 +131,14 @@ class TestPermissions:
 
 class TestEditFile:
     def test_replaces_a_unique_snippet(self, runner):
-        out = runner.run("edit_file", {
-            "path": "src/main.c", "old_text": "g_ticks++;", "new_text": "g_ticks += 2u;",
-        })
+        out = runner.run(
+            "edit_file",
+            {
+                "path": "src/main.c",
+                "old_text": "g_ticks++;",
+                "new_text": "g_ticks += 2u;",
+            },
+        )
         assert not out.is_error
         assert "g_ticks += 2u;" in (runner.cfg.root / "src" / "main.c").read_text()
 
@@ -143,9 +148,14 @@ class TestEditFile:
         assert out.is_error and "appears 2 times" in out.text
 
     def test_missing_snippet_is_refused(self, runner):
-        out = runner.run("edit_file", {
-            "path": "src/main.c", "old_text": "not in the file", "new_text": "x",
-        })
+        out = runner.run(
+            "edit_file",
+            {
+                "path": "src/main.c",
+                "old_text": "not in the file",
+                "new_text": "x",
+            },
+        )
         assert out.is_error and "not found" in out.text
 
 
@@ -216,6 +226,7 @@ class TestSystemContext:
 
 # --- agent loop -------------------------------------------------------------
 
+
 class FakeStream:
     """Stands in for the SDK's streaming context manager."""
 
@@ -253,8 +264,9 @@ class FakeClient:
 
 
 def text_delta(text):
-    return SimpleNamespace(type="content_block_delta",
-                           delta=SimpleNamespace(type="text_delta", text=text))
+    return SimpleNamespace(
+        type="content_block_delta", delta=SimpleNamespace(type="text_delta", text=text)
+    )
 
 
 def message(blocks, stop_reason="end_turn"):
@@ -265,13 +277,15 @@ class TestAgentLoop:
     def _agent(self, indexed, scripted, **kw):
         cfg, store = indexed
         runner = ToolRunner(cfg, store, approve=lambda n, a: True, **kw)
-        return Agent(cfg, store, runner, client=FakeClient(scripted),
-                     use_fallbacks=False, **kw)
+        return Agent(cfg, store, runner, client=FakeClient(scripted), use_fallbacks=False, **kw)
 
     def test_plain_answer_streams_and_persists(self, indexed):
-        agent = self._agent(indexed, [
-            (message([{"type": "text", "text": "Use 400 kHz."}]), [text_delta("Use 400 kHz.")]),
-        ])
+        agent = self._agent(
+            indexed,
+            [
+                (message([{"type": "text", "text": "Use 400 kHz."}]), [text_delta("Use 400 kHz.")]),
+            ],
+        )
         events = list(agent.stream_turn("what speed for I2C1?"))
         assert [e.text for e in events if e.type == "text_delta"] == ["Use 400 kHz."]
         assert events[-1].type == "done"
@@ -279,13 +293,22 @@ class TestAgentLoop:
         assert agent.session.messages[0]["content"] == "what speed for I2C1?"
 
     def test_tool_call_is_executed_and_fed_back(self, indexed):
-        tool_use = {"type": "tool_use", "id": "toolu_1", "name": "lookup_register",
-                    "input": {"name": "CTRL_MEAS"}}
-        agent = self._agent(indexed, [
-            (message([tool_use], stop_reason="tool_use"), []),
-            (message([{"type": "text", "text": "CTRL_MEAS is at 0xF4 (ACME1234 p.1)."}]),
-             [text_delta("CTRL_MEAS is at 0xF4 (ACME1234 p.1).")]),
-        ])
+        tool_use = {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "lookup_register",
+            "input": {"name": "CTRL_MEAS"},
+        }
+        agent = self._agent(
+            indexed,
+            [
+                (message([tool_use], stop_reason="tool_use"), []),
+                (
+                    message([{"type": "text", "text": "CTRL_MEAS is at 0xF4 (ACME1234 p.1)."}]),
+                    [text_delta("CTRL_MEAS is at 0xF4 (ACME1234 p.1).")],
+                ),
+            ],
+        )
         events = list(agent.stream_turn("where is CTRL_MEAS?"))
 
         assert [e.name for e in events if e.type == "tool_use"] == ["lookup_register"]
@@ -299,12 +322,19 @@ class TestAgentLoop:
         assert len(agent.client.messages.calls[1]["messages"]) == 3
 
     def test_tool_error_is_reported_not_raised(self, indexed):
-        tool_use = {"type": "tool_use", "id": "t1", "name": "read_file",
-                    "input": {"path": "../../etc/passwd"}}
-        agent = self._agent(indexed, [
-            (message([tool_use], stop_reason="tool_use"), []),
-            (message([{"type": "text", "text": "That path is outside the project."}]), []),
-        ])
+        tool_use = {
+            "type": "tool_use",
+            "id": "t1",
+            "name": "read_file",
+            "input": {"path": "../../etc/passwd"},
+        }
+        agent = self._agent(
+            indexed,
+            [
+                (message([tool_use], stop_reason="tool_use"), []),
+                (message([{"type": "text", "text": "That path is outside the project."}]), []),
+            ],
+        )
         events = list(agent.stream_turn("read /etc/passwd"))
         errors = [e for e in events if e.type == "tool_result" and e.data.get("is_error")]
         assert errors
@@ -318,10 +348,13 @@ class TestAgentLoop:
         assert events[-1].type == "error" and "cyber" in events[-1].text
 
     def test_pause_turn_resumes(self, indexed):
-        agent = self._agent(indexed, [
-            (message([{"type": "text", "text": "part 1 "}], stop_reason="pause_turn"), []),
-            (message([{"type": "text", "text": "part 2"}]), []),
-        ])
+        agent = self._agent(
+            indexed,
+            [
+                (message([{"type": "text", "text": "part 1 "}], stop_reason="pause_turn"), []),
+                (message([{"type": "text", "text": "part 2"}]), []),
+            ],
+        )
         events = list(agent.stream_turn("long running question"))
         assert events[-1].type == "done"
         assert len(agent.client.messages.calls) == 2
@@ -335,9 +368,13 @@ class TestAgentLoop:
                 )
 
         cfg, store = indexed
-        agent = Agent(cfg, store, ToolRunner(cfg, store),
-                      client=SimpleNamespace(messages=NoAuthMessages()),
-                      use_fallbacks=False)
+        agent = Agent(
+            cfg,
+            store,
+            ToolRunner(cfg, store),
+            client=SimpleNamespace(messages=NoAuthMessages()),
+            use_fallbacks=False,
+        )
         events = list(agent.stream_turn("hello"))
         assert events[-1].type == "error"
         assert "ANTHROPIC_API_KEY" in events[-1].text
@@ -348,9 +385,13 @@ class TestAgentLoop:
                 raise TypeError("stream() got an unexpected keyword argument 'nope'")
 
         cfg, store = indexed
-        agent = Agent(cfg, store, ToolRunner(cfg, store),
-                      client=SimpleNamespace(messages=BrokenMessages()),
-                      use_fallbacks=False)
+        agent = Agent(
+            cfg,
+            store,
+            ToolRunner(cfg, store),
+            client=SimpleNamespace(messages=BrokenMessages()),
+            use_fallbacks=False,
+        )
         with pytest.raises(TypeError):
             list(agent.stream_turn("hello"))
 
@@ -377,10 +418,20 @@ class TestSession:
         # Interleave tool-result user messages, which must never start the history.
         for i in range(40):
             session.messages.append({"role": "user", "content": f"question {i}"})
-            session.messages.append({"role": "assistant", "content": [
-                {"type": "tool_use", "id": f"t{i}", "name": "search_code", "input": {}}]})
-            session.messages.append({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": f"t{i}", "content": "…"}]})
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": f"t{i}", "name": "search_code", "input": {}}
+                    ],
+                }
+            )
+            session.messages.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "…"}],
+                }
+            )
         session.trim(limit=10)
         assert len(session.messages) <= 12
         first = session.messages[0]

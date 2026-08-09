@@ -125,6 +125,31 @@ const form = document.getElementById('form');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 let sessionId = null;
+let authToken = localStorage.getItem('fwcopilot_token') || '';
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+async function ensureAuth() {
+  try {
+    const meta = await (await fetch('/api/meta')).json();
+    if (meta.auth_required && !authToken) {
+      const token = prompt('This fwcopilot server requires an access token:');
+      if (token) {
+        authToken = token.trim();
+        localStorage.setItem('fwcopilot_token', authToken);
+      }
+    }
+  } catch (e) { /* server may predate /api/meta; carry on unauthenticated */ }
+}
+
+function clearAuth() {
+  authToken = '';
+  localStorage.removeItem('fwcopilot_token');
+}
 
 function esc(s) {
   return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -162,7 +187,14 @@ function addMessage(who, cls) {
 
 async function loadStatus() {
   try {
-    const s = await (await fetch('/api/status')).json();
+    const res = await fetch('/api/status', {headers: authHeaders()});
+    if (res.status === 401) {
+      clearAuth();
+      document.getElementById('side').innerHTML =
+        '<div class="warn">Access token rejected — reload to enter it again.</div>';
+      return;
+    }
+    const s = await res.json();
     document.getElementById('proj').textContent = s.project;
     document.getElementById('root').textContent = s.root;
     const p = s.project_profile, b = s.board, side = [];
@@ -226,9 +258,18 @@ form.addEventListener('submit', async (e) => {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: authHeaders({'Content-Type': 'application/json'}),
       body: JSON.stringify({message, session_id: sessionId}),
     });
+    if (res.status === 401) {
+      clearAuth();
+      const div = document.createElement('div');
+      div.className = 'err-box';
+      div.textContent = 'Access token rejected. Reload the page to enter it again.';
+      body.appendChild(div);
+      sendBtn.disabled = false;
+      return;
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -288,7 +329,7 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-loadStatus();
+ensureAuth().then(loadStatus);
 </script>
 </body>
 </html>

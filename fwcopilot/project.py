@@ -67,7 +67,13 @@ TOOLCHAIN_PATTERNS = [
 ]
 
 PERIPHERAL_PATTERNS = {
-    "UART/USART": [r"\bUSART\d?\b", r"\bUART\d?\b", r"HAL_UART_", r"uart_(write|read|init)", r"Serial\d?\."],
+    "UART/USART": [
+        r"\bUSART\d?\b",
+        r"\bUART\d?\b",
+        r"HAL_UART_",
+        r"uart_(write|read|init)",
+        r"Serial\d?\.",
+    ],
     "I2C": [r"\bI2C\d?\b", r"HAL_I2C_", r"i2c_(write|read|master)", r"Wire\."],
     "SPI": [r"\bSPI\d?\b", r"HAL_SPI_", r"spi_(write|read|transfer)"],
     "ADC": [r"\bADC\d?\b", r"HAL_ADC_", r"adc_(read|init|oneshot)", r"analogRead"],
@@ -84,7 +90,10 @@ PERIPHERAL_PATTERNS = {
     "Sleep/Low power": [r"__WFI\(\)", r"HAL_PWR_", r"esp_light_sleep|esp_deep_sleep", r"pm_"],
 }
 
-INTERRUPT_RE = re.compile(r"^\s*(?:void|__attribute__\([^)]*\)\s*void)\s+([A-Za-z_][A-Za-z0-9_]*(?:_IRQHandler|_Handler|_isr|_ISR))\s*\(", re.M)
+INTERRUPT_RE = re.compile(
+    r"^\s*(?:void|__attribute__\([^)]*\)\s*void)\s+([A-Za-z_][A-Za-z0-9_]*(?:_IRQHandler|_Handler|_isr|_ISR))\s*\(",
+    re.M,
+)
 
 
 @dataclass
@@ -126,7 +135,9 @@ class ProjectProfile:
             lines.append(f"- Toolchain: {', '.join(self.toolchains)}")
         if self.mcu_hints:
             lines.append(f"- MCU (detected from sources): {', '.join(self.mcu_hints)}")
-        lines.append(f"- RTOS: {', '.join(self.rtos) if self.rtos else 'bare-metal / none detected'}")
+        lines.append(
+            f"- RTOS: {', '.join(self.rtos) if self.rtos else 'bare-metal / none detected'}"
+        )
         if self.memory_regions:
             regions = ", ".join(f"{m.name} @ {m.origin} ({m.length})" for m in self.memory_regions)
             lines.append(f"- Memory map ({', '.join(self.linker_scripts)}): {regions}")
@@ -136,7 +147,11 @@ class ProjectProfile:
             lines.append(f"- Entry points: {', '.join(self.entry_points)}")
         if self.interrupt_handlers:
             shown = self.interrupt_handlers[:12]
-            more = "" if len(self.interrupt_handlers) <= 12 else f" (+{len(self.interrupt_handlers) - 12} more)"
+            more = (
+                ""
+                if len(self.interrupt_handlers) <= 12
+                else f" (+{len(self.interrupt_handlers) - 12} more)"
+            )
             lines.append(f"- ISRs: {', '.join(shown)}{more}")
         return "\n".join(lines)
 
@@ -191,17 +206,19 @@ def chunk_source(text: str, lines_per_chunk: int = CODE_CHUNK_LINES) -> List[Dic
     chunks: List[Dict[str, Any]] = []
     step = max(lines_per_chunk - CODE_CHUNK_OVERLAP, 1)
     for start in range(0, max(len(lines), 1), step):
-        window = lines[start:start + lines_per_chunk]
+        window = lines[start : start + lines_per_chunk]
         if not window:
             break
         body = "\n".join(window).strip()
         if body:
-            chunks.append({
-                "line": start + 1,
-                "end_line": start + len(window),
-                "heading": _nearest_symbol(lines, start),
-                "text": body,
-            })
+            chunks.append(
+                {
+                    "line": start + 1,
+                    "end_line": start + len(window),
+                    "heading": _nearest_symbol(lines, start),
+                    "text": body,
+                }
+            )
         if start + lines_per_chunk >= len(lines):
             break
     return chunks
@@ -224,11 +241,9 @@ def scan_project(root: Path, globs: List[str], excludes: List[str]) -> ProjectPr
     files = iter_source_files(root, globs, excludes)
     profile.source_count = len(files)
 
-    top_dirs = sorted({
-        p.relative_to(root).parts[0]
-        for p in files
-        if len(p.relative_to(root).parts) > 1
-    })
+    top_dirs = sorted(
+        {p.relative_to(root).parts[0] for p in files if len(p.relative_to(root).parts) > 1}
+    )
     profile.top_dirs = top_dirs[:15]
 
     # Build system detection from marker files anywhere in the tree.
@@ -284,9 +299,13 @@ def scan_project(root: Path, globs: List[str], excludes: List[str]) -> ProjectPr
                     peripherals.setdefault(name, None)
             for match in INTERRUPT_RE.finditer(text):
                 isrs.setdefault(match.group(1), None)
-            if re.search(r"\b(?:int|void)\s+main\s*\(", text) or re.search(r"\bvoid\s+app_main\s*\(", text):
+            if re.search(r"\b(?:int|void)\s+main\s*\(", text) or re.search(
+                r"\bvoid\s+app_main\s*\(", text
+            ):
                 entries.setdefault(rel, None)
-            if re.search(r"\bvoid\s+setup\s*\(\s*\)", text) and re.search(r"\bvoid\s+loop\s*\(\s*\)", text):
+            if re.search(r"\bvoid\s+setup\s*\(\s*\)", text) and re.search(
+                r"\bvoid\s+loop\s*\(\s*\)", text
+            ):
                 entries.setdefault(rel, None)
 
     profile.peripherals = list(peripherals)

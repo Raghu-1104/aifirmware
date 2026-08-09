@@ -10,12 +10,11 @@ cache breakpoint so repeated turns re-read it at cache rates.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .board import BoardProfile, load_board
 from .config import Config
-from .project import ProjectProfile, MemoryRegion, scan_project
+from .project import MemoryRegion, ProjectProfile, scan_project
 from .store import Store
 
 PROFILE_CACHE = "project_profile.json"

@@ -29,14 +29,42 @@ _REG_NAME = r"[A-Z][A-Z0-9]{1,}(?:_[A-Z0-9]+){0,4}"
 _REG_PATTERNS = [
     re.compile(rf"^\s*(?P<name>{_REG_NAME})\s+(?P<addr>0x[0-9A-Fa-f]{{1,4}})\b(?P<desc>.{{0,80}})"),
     re.compile(rf"^\s*(?P<addr>0x[0-9A-Fa-f]{{1,4}})\s+(?P<name>{_REG_NAME})\b(?P<desc>.{{0,80}})"),
-    re.compile(rf"(?P<name>{_REG_NAME})\s*\(\s*(?P<addr>0x[0-9A-Fa-f]{{1,4}})\s*\)(?P<desc>.{{0,60}})"),
+    re.compile(
+        rf"(?P<name>{_REG_NAME})\s*\(\s*(?P<addr>0x[0-9A-Fa-f]{{1,4}})\s*\)(?P<desc>.{{0,60}})"
+    ),
 ]
 
 # Words that look like register names but never are.
 _REG_STOPWORDS = {
-    "AND", "THE", "FOR", "NOT", "ALL", "MAX", "MIN", "TYP", "NOTE", "TABLE",
-    "FIGURE", "PAGE", "DOC", "ID", "REV", "VDD", "VSS", "GND", "NC", "TBD",
-    "I2C", "SPI", "UART", "USB", "PDF", "LSB", "MSB", "MHZ", "KHZ",
+    "AND",
+    "THE",
+    "FOR",
+    "NOT",
+    "ALL",
+    "MAX",
+    "MIN",
+    "TYP",
+    "NOTE",
+    "TABLE",
+    "FIGURE",
+    "PAGE",
+    "DOC",
+    "ID",
+    "REV",
+    "VDD",
+    "VSS",
+    "GND",
+    "NC",
+    "TBD",
+    "I2C",
+    "SPI",
+    "UART",
+    "USB",
+    "PDF",
+    "LSB",
+    "MSB",
+    "MHZ",
+    "KHZ",
 }
 
 SUPPORTED_SUFFIXES = {".pdf", ".txt", ".md"}
@@ -193,21 +221,35 @@ def ingest_datasheet(
     """Index a single datasheet file into the store."""
     path = Path(path)
     if path.suffix.lower() not in SUPPORTED_SUFFIXES:
-        return IngestResult(rel_path, part, 0, 0, 0, skipped=True,
-                            reason=f"unsupported format {path.suffix}")
+        return IngestResult(
+            rel_path, part, 0, 0, 0, skipped=True, reason=f"unsupported format {path.suffix}"
+        )
 
     sha = sha256_file(path)
     if not force and store.doc_is_current(rel_path, sha):
         row = store.get_doc(rel_path)
-        return IngestResult(rel_path, row["part"] if row else part,
-                            row["pages"] if row else 0, 0, 0,
-                            skipped=True, reason="unchanged")
+        return IngestResult(
+            rel_path,
+            row["part"] if row else part,
+            row["pages"] if row else 0,
+            0,
+            0,
+            skipped=True,
+            reason="unchanged",
+        )
 
     pages = extract_pages(path)
     text_pages = [p for p in pages if p.strip()]
     if not text_pages:
-        return IngestResult(rel_path, part, len(pages), 0, 0, skipped=True,
-                            reason="no extractable text (scanned PDF? run OCR first)")
+        return IngestResult(
+            rel_path,
+            part,
+            len(pages),
+            0,
+            0,
+            skipped=True,
+            reason="no extractable text (scanned PDF? run OCR first)",
+        )
 
     part = part or guess_part_number(path.name, pages)
     doc_id = store.upsert_doc(
@@ -259,8 +301,12 @@ def ingest_directory(
         meta = component_map.get(rel, {})
         results.append(
             ingest_datasheet(
-                store, path, rel_path=rel, part=meta.get("part"),
-                component=meta.get("component"), force=force,
+                store,
+                path,
+                rel_path=rel,
+                part=meta.get("part"),
+                component=meta.get("component"),
+                force=force,
             )
         )
     return results

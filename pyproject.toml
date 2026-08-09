@@ -1,33 +1,140 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "fwcopilot"
-version = "0.1.0"
-description = "A firmware engineering AI assistant that understands your project, your board, and your ICs' datasheets."
+dynamic = ["version"]
+description = "Firmware engineering assistant that understands your project, your board and your ICs' datasheets"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+authors = [{ name = "fwcopilot contributors" }]
+keywords = [
+    "firmware", "embedded", "datasheet", "cortex-m", "rtos",
+    "static-analysis", "llm", "assistant", "claude",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
 dependencies = [
-    "anthropic>=0.60",
+    "anthropic>=0.60,<1.0",
     "pypdf>=4.0",
     "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
-server = ["fastapi>=0.110", "uvicorn>=0.27"]
-dev = ["pytest>=7.4"]
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.6",
+    "mypy>=1.8",
+    "types-PyYAML",
+    "build>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Raghu-1104/aifirmware"
+Repository = "https://github.com/Raghu-1104/aifirmware"
+Issues = "https://github.com/Raghu-1104/aifirmware/issues"
+Changelog = "https://github.com/Raghu-1104/aifirmware/blob/main/CHANGELOG.md"
 
 [project.scripts]
 fwcopilot = "fwcopilot.cli:main"
 fwc = "fwcopilot.cli:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "fwcopilot.__version__" }
+
 [tool.setuptools.packages.find]
 include = ["fwcopilot*"]
 
 [tool.setuptools.package-data]
-fwcopilot = ["web/*.html", "templates/**/*"]
+fwcopilot = ["web/*.html", "py.typed"]
+
+# ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "error::DeprecationWarning:fwcopilot.*",
+]
+
+[tool.coverage.run]
+source = ["fwcopilot"]
+omit = ["fwcopilot/__main__.py"]
+
+[tool.coverage.report]
+# The server entry point and interactive REPL loop are exercised by hand, not
+# in CI; everything else is expected to stay covered.
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "B008",    # FastAPI's Depends() in defaults is the documented pattern
+    "SIM105",  # contextlib.suppress is not always clearer
+    # PEP 585/604 built-in generics and `X | None`. We support Python 3.9, and
+    # while `from __future__ import annotations` makes these safe in most
+    # annotations, Pydantic resolves model annotations at runtime via
+    # get_type_hints() — where `str | None` raises TypeError on 3.9. Keeping
+    # typing.Optional/Dict/List throughout is the consistent, working choice.
+    "UP006",
+    "UP035",
+    "UP045",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "RUF012"]
+
+[tool.mypy]
+# No `python_version` pin: current mypy releases refuse targets below 3.10,
+# while the package itself still supports 3.9 at runtime (enforced by the CI
+# test matrix, which is the check that actually matters for compatibility).
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["build/", "dist/"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true

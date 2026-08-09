@@ -11,14 +11,47 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Set
 
 from .board import load_board
 from .config import Config
+from .diagnostics import BuildResult, parse_build_output
 from .store import Store
 
 MAX_TOOL_CHARS = 20000
+BUILD_TIMEOUT_SECONDS = 900
+
+
+def run_build(cfg: Config, timeout: int = BUILD_TIMEOUT_SECONDS) -> Optional[BuildResult]:
+    """Run the configured build command and parse its diagnostics.
+
+    Shared by the CLI's `build` command and the agent's `run_build` tool so both
+    report identically. Returns None when no build command is configured.
+    """
+    command = cfg.build_command
+    if not command:
+        return None
+    try:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=str(cfg.root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        returncode = proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        output += f"\n[build timed out after {timeout}s]"
+        returncode = 124
+    return BuildResult(
+        command=command,
+        returncode=returncode,
+        output=output,
+        diagnostics=parse_build_output(output),
+    )
 
 
 def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any]]:
@@ -57,9 +90,15 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "datasheet": {"type": "string", "description": "Part name, board ref, or datasheet path."},
+                    "datasheet": {
+                        "type": "string",
+                        "description": "Part name, board ref, or datasheet path.",
+                    },
                     "page": {"type": "integer", "description": "1-based page number."},
-                    "radius": {"type": "integer", "description": "Also include N pages either side (default 0, max 3)."},
+                    "radius": {
+                        "type": "integer",
+                        "description": "Also include N pages either side (default 0, max 3).",
+                    },
                 },
                 "required": ["datasheet", "page"],
             },
@@ -74,8 +113,14 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Register name or address, e.g. 'CTRL_MEAS' or '0xF4'."},
-                    "component": {"type": "string", "description": "Optional part or board ref to narrow the search."},
+                    "name": {
+                        "type": "string",
+                        "description": "Register name or address, e.g. 'CTRL_MEAS' or '0xF4'.",
+                    },
+                    "component": {
+                        "type": "string",
+                        "description": "Optional part or board ref to narrow the search.",
+                    },
                 },
                 "required": ["name"],
             },
@@ -113,8 +158,14 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Symbol, function, macro or phrase to find."},
-                    "path_prefix": {"type": "string", "description": "Optional path prefix filter, e.g. 'src/drivers'."},
+                    "query": {
+                        "type": "string",
+                        "description": "Symbol, function, macro or phrase to find.",
+                    },
+                    "path_prefix": {
+                        "type": "string",
+                        "description": "Optional path prefix filter, e.g. 'src/drivers'.",
+                    },
                     "limit": {"type": "integer", "description": "Max results (default 6, max 15)."},
                 },
                 "required": ["query"],
@@ -127,8 +178,14 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Project-relative path."},
-                    "start_line": {"type": "integer", "description": "1-based first line (default 1)."},
-                    "line_count": {"type": "integer", "description": "How many lines to read (default 200, max 800)."},
+                    "start_line": {
+                        "type": "integer",
+                        "description": "1-based first line (default 1).",
+                    },
+                    "line_count": {
+                        "type": "integer",
+                        "description": "How many lines to read (default 200, max 800).",
+                    },
                 },
                 "required": ["path"],
             },
@@ -139,10 +196,51 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string", "description": "Glob relative to the project root (default '**/*')."},
-                    "limit": {"type": "integer", "description": "Max paths to return (default 100)."},
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob relative to the project root (default '**/*').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max paths to return (default 100).",
+                    },
                 },
             },
+        },
+        {
+            "name": "run_lint",
+            "description": (
+                "Run firmware-specific static checks over the project's C sources: blocking "
+                "or non-reentrant calls in ISRs, non-volatile globals shared with an ISR, "
+                "FreeRTOS APIs used without their FromISR variant, busy-waits with no "
+                "timeout, discarded HAL status codes, unbounded string functions, and "
+                "hardware registers accessed without volatile. Read-only and fast — use it "
+                "when reviewing code or when the user reports a hang or a race."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path_prefix": {
+                        "type": "string",
+                        "description": "Limit to a subtree, e.g. 'src/drivers'.",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["error", "warning", "info"],
+                        "description": "Minimum severity to report (default 'warning').",
+                    },
+                },
+            },
+        },
+        {
+            "name": "analyze_memory",
+            "description": (
+                "Report the firmware's flash and RAM budget from the latest build artifacts "
+                "(ELF and/or linker map), measured against the part's capacity declared in "
+                "board.yaml, including the largest contributing object files. Use when asked "
+                "about size, whether something will fit, or after a region-overflow link error."
+            ),
+            "input_schema": {"type": "object", "properties": {}},
         },
         {
             "name": "remember",
@@ -155,7 +253,10 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "note": {"type": "string", "description": "One or two sentences, self-contained."},
+                    "note": {
+                        "type": "string",
+                        "description": "One or two sentences, self-contained.",
+                    },
                 },
                 "required": ["note"],
             },
@@ -163,47 +264,56 @@ def tool_definitions(allow_write: bool, allow_build: bool) -> List[Dict[str, Any
     ]
 
     if allow_write:
-        tools.append({
-            "name": "write_file",
-            "description": (
-                "Create or overwrite a project file with full content. Requires user approval. "
-                "Read the file first if it already exists — this replaces it entirely."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Project-relative path."},
-                    "content": {"type": "string", "description": "Complete new file content."},
+        tools.append(
+            {
+                "name": "write_file",
+                "description": (
+                    "Create or overwrite a project file with full content. Requires user approval. "
+                    "Read the file first if it already exists — this replaces it entirely."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project-relative path."},
+                        "content": {"type": "string", "description": "Complete new file content."},
+                    },
+                    "required": ["path", "content"],
                 },
-                "required": ["path", "content"],
-            },
-        })
-        tools.append({
-            "name": "edit_file",
-            "description": (
-                "Replace an exact snippet in an existing file. Requires user approval. "
-                "`old_text` must appear exactly once in the file."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Project-relative path."},
-                    "old_text": {"type": "string", "description": "Exact text to replace, including indentation."},
-                    "new_text": {"type": "string", "description": "Replacement text."},
+            }
+        )
+        tools.append(
+            {
+                "name": "edit_file",
+                "description": (
+                    "Replace an exact snippet in an existing file. Requires user approval. "
+                    "`old_text` must appear exactly once in the file."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project-relative path."},
+                        "old_text": {
+                            "type": "string",
+                            "description": "Exact text to replace, including indentation.",
+                        },
+                        "new_text": {"type": "string", "description": "Replacement text."},
+                    },
+                    "required": ["path", "old_text", "new_text"],
                 },
-                "required": ["path", "old_text", "new_text"],
-            },
-        })
+            }
+        )
 
     if allow_build:
-        tools.append({
-            "name": "run_build",
-            "description": (
-                "Run the project's configured build command and return its output. "
-                "Requires user approval. Use after making code changes to check they compile."
-            ),
-            "input_schema": {"type": "object", "properties": {}},
-        })
+        tools.append(
+            {
+                "name": "run_build",
+                "description": (
+                    "Run the project's configured build command and return its output. "
+                    "Requires user approval. Use after making code changes to check they compile."
+                ),
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        )
 
     return tools
 
@@ -221,8 +331,8 @@ ApprovalFn = Callable[[str, Dict[str, Any]], bool]
 class ToolRunner:
     """Executes tool calls against a workspace."""
 
-    WRITE_TOOLS = {"write_file", "edit_file"}
-    EXEC_TOOLS = {"run_build"}
+    WRITE_TOOLS: ClassVar[Set[str]] = {"write_file", "edit_file"}
+    EXEC_TOOLS: ClassVar[Set[str]] = {"run_build"}
 
     def __init__(
         self,
@@ -272,8 +382,11 @@ class ToolRunner:
         hits = self.store.search(query, kind="datasheet", part=component, limit=limit)
         if not hits:
             available = [r["part"] or r["title"] for r in self.store.list_docs("datasheet")]
-            note = f" Indexed datasheets: {', '.join(available)}." if available else \
-                   " No datasheets are indexed for this project yet."
+            note = (
+                f" Indexed datasheets: {', '.join(available)}."
+                if available
+                else " No datasheets are indexed for this project yet."
+            )
             return ToolResult(f"No datasheet matches for '{query}'.{note}")
         out = [f"{len(hits)} result(s) for '{query}':\n"]
         for i, hit in enumerate(hits, 1):
@@ -311,7 +424,9 @@ class ToolRunner:
         name = str(args.get("name", "")).strip()
         rows = self.store.find_registers(name, args.get("component"))
         if not rows:
-            fallback = self.store.search(name, kind="datasheet", part=args.get("component"), limit=4)
+            fallback = self.store.search(
+                name, kind="datasheet", part=args.get("component"), limit=4
+            )
             if fallback:
                 body = "\n\n".join(f"[{h.locator()}] {h.text[:800]}" for h in fallback)
                 return ToolResult(
@@ -329,7 +444,9 @@ class ToolRunner:
     def _t_list_datasheets(self, args: Dict[str, Any]) -> ToolResult:
         rows = self.store.list_docs("datasheet")
         if not rows:
-            return ToolResult("No datasheets indexed. Add one with `fwcopilot add-datasheet <pdf>`.")
+            return ToolResult(
+                "No datasheets indexed. Add one with `fwcopilot add-datasheet <pdf>`."
+            )
         lines = [f"{len(rows)} datasheet(s) indexed:"]
         for r in rows:
             ref = f" [{r['component']}]" if r["component"] else ""
@@ -393,7 +510,7 @@ class ToolRunner:
         start = max(1, int(args.get("start_line") or 1))
         count = max(1, min(int(args.get("line_count") or 200), 800))
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        window = lines[start - 1:start - 1 + count]
+        window = lines[start - 1 : start - 1 + count]
         if not window:
             return ToolResult(f"{args['path']} has {len(lines)} lines; nothing at line {start}.")
         numbered = "\n".join(f"{start + i:>5} | {line}" for i, line in enumerate(window))
@@ -416,6 +533,68 @@ class ToolRunner:
         if not matches:
             return ToolResult(f"No files match '{pattern}'.")
         return ToolResult(f"{len(matches)} file(s):\n" + "\n".join(matches))
+
+    # ---- analysis ------------------------------------------------------
+    def _t_run_lint(self, args: Dict[str, Any]) -> ToolResult:
+        from .lint import SEVERITIES, lint_paths, summarize
+        from .project import iter_source_files
+
+        minimum = str(args.get("severity") or "warning")
+        rank = {sev: i for i, sev in enumerate(SEVERITIES)}
+        threshold = rank.get(minimum, 1)
+
+        paths = iter_source_files(self.cfg.root, self.cfg.source_globs, self.cfg.excludes)
+        prefix = args.get("path_prefix")
+        if prefix:
+            paths = [p for p in paths if str(p.relative_to(self.cfg.root)).startswith(prefix)]
+
+        findings = [
+            f for f in lint_paths(paths, self.cfg.root) if rank.get(f.severity, 2) <= threshold
+        ]
+        if not findings:
+            return ToolResult(
+                f"No findings at severity '{minimum}' or above across {len(paths)} file(s).",
+                summary="clean",
+            )
+        counts = summarize(findings)
+        head = (
+            f"{len(findings)} finding(s): {counts['error']} error, "
+            f"{counts['warning']} warning, {counts['info']} info\n"
+        )
+        body = "\n".join(f.format() for f in findings[:60])
+        if len(findings) > 60:
+            body += f"\n… and {len(findings) - 60} more"
+        return ToolResult(head + body, summary=f"{counts['error']}E/{counts['warning']}W")
+
+    def _t_analyze_memory(self, args: Dict[str, Any]) -> ToolResult:
+        from .board import load_board
+        from .memory import analyze, discover_artifacts, run_size_tool
+
+        elf, map_file = discover_artifacts(self.cfg.root, self.cfg.elf_path, self.cfg.map_path)
+        if not elf and not map_file:
+            return ToolResult(
+                "No build artifacts found. Build the firmware first, or set build.elf / "
+                "build.map in .fwcopilot/config.yaml.",
+                is_error=True,
+            )
+        size_output = None
+        if elf:
+            try:
+                size_output, _ = run_size_tool(elf)
+            except (FileNotFoundError, OSError, Exception):
+                size_output = None
+        map_text = map_file.read_text(encoding="utf-8", errors="replace") if map_file else None
+
+        report = analyze(
+            load_board(self.cfg.board_path), size_output=size_output, map_text=map_text
+        )
+        header = "Artifacts: " + ", ".join(
+            self.cfg.rel(p) for p in (elf, map_file) if p is not None
+        )
+        return ToolResult(
+            f"{header}\n\n{report.to_markdown()}",
+            summary=f"flash {report.flash_pct:.0f}%" if report.flash_pct else "size report",
+        )
 
     # ---- memory --------------------------------------------------------
     def _t_remember(self, args: Dict[str, Any]) -> ToolResult:
@@ -468,24 +647,15 @@ class ToolRunner:
         return ToolResult(f"Edited {rel}.", summary=f"Edited {rel}")
 
     def _t_run_build(self, args: Dict[str, Any]) -> ToolResult:
-        command = self.cfg.build_command
-        if not command:
+        result = run_build(self.cfg)
+        if result is None:
             return ToolResult(
                 "No build command configured. Set `build.command` in .fwcopilot/config.yaml.",
                 is_error=True,
             )
-        try:
-            proc = subprocess.run(
-                command, shell=True, cwd=str(self.cfg.root),
-                capture_output=True, text=True, timeout=900,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult("Build timed out after 900s.", is_error=True)
-        output = (proc.stdout or "") + (proc.stderr or "")
-        tail = output[-8000:]
-        status = "succeeded" if proc.returncode == 0 else f"failed (exit {proc.returncode})"
-        return ToolResult(
-            f"`{command}` {status}.\n\n{tail}",
-            is_error=proc.returncode != 0,
-            summary=f"build {status}",
-        )
+        # Structured diagnostics beat a wall of log text: the model gets
+        # file:line facts instead of having to re-read the build output.
+        body = result.format()
+        if not result.ok and not result.diagnostics:
+            body += "\n\nLast output lines:\n" + "\n".join(result.output.strip().splitlines()[-25:])
+        return ToolResult(body, is_error=not result.ok, summary=result.summary())
