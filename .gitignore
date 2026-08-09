@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# fwcopilot workspace state (index DB, sessions, cached text)
+.fwcopilot/index.db
+.fwcopilot/index.db-*
+.fwcopilot/sessions/
+.fwcopilot/cache/

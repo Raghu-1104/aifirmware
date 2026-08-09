@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fwcopilot</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #151a21; --panel-2: #1b2129; --line: #262d38;
+    --text: #e5e9ef; --muted: #8b97a8; --accent: #4da3ff; --accent-dim: #1d3a5c;
+    --ok: #4ec98a; --warn: #e8b04b; --err: #ef6b6b;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --line: #dfe3e9;
+      --text: #16191d; --muted: #5d6875; --accent: #0b64d0; --accent-dim: #d8e6fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: grid; grid-template-columns: 300px 1fr;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 16px; overflow-y: auto;
+  }
+  aside h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .2px; }
+  aside .sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; word-break: break-all; }
+  aside h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); margin: 18px 0 6px; font-weight: 600;
+  }
+  .kv { font-size: 12.5px; margin: 3px 0; color: var(--text); }
+  .kv span { color: var(--muted); }
+  .chip {
+    display: inline-block; background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 1px 9px; font-size: 11.5px; margin: 2px 3px 2px 0;
+  }
+  .ds { font-size: 12.5px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .ds b { font-weight: 600; }
+  .ds span { color: var(--muted); font-size: 11.5px; }
+  .warn { color: var(--warn); font-size: 12px; margin: 4px 0; }
+
+  main { display: flex; flex-direction: column; min-width: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 24px 28px; scroll-behavior: smooth; }
+  .msg { max-width: 900px; margin: 0 auto 22px; }
+  .who {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); margin-bottom: 6px; font-weight: 600;
+  }
+  .msg.user .body {
+    background: var(--accent-dim); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 14px; white-space: pre-wrap;
+  }
+  .body { word-wrap: break-word; }
+  .body p { margin: 0 0 10px; }
+  .body code {
+    font-family: var(--mono); font-size: 12.5px; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  .body pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; margin: 10px 0;
+  }
+  .body pre code { background: none; border: none; padding: 0; font-size: 12.5px; }
+  .tool {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    border-left: 2px solid var(--line); padding: 3px 0 3px 10px; margin: 4px 0;
+  }
+  .tool b { color: var(--accent); font-weight: 600; }
+  .tool.err { color: var(--err); border-left-color: var(--err); }
+  .err-box { color: var(--err); border: 1px solid var(--err); border-radius: 8px; padding: 8px 12px; }
+
+  form {
+    border-top: 1px solid var(--line); background: var(--panel);
+    padding: 14px 28px; display: flex; gap: 10px; align-items: flex-end;
+  }
+  textarea {
+    flex: 1; resize: none; min-height: 46px; max-height: 200px;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px; font: inherit; outline: none;
+  }
+  textarea:focus { border-color: var(--accent); }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 12px 20px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { max-width: 900px; margin: 0 auto; color: var(--muted); font-size: 12.5px; }
+  .hint code { font-family: var(--mono); }
+  @media (max-width: 800px) { body { grid-template-columns: 1fr; } aside { display: none; } }
+</style>
+</head>
+<body>
+<aside>
+  <h1 id="proj">fwcopilot</h1>
+  <div class="sub" id="root"></div>
+  <div id="side"></div>
+</aside>
+
+<main>
+  <div id="log">
+    <div class="msg">
+      <div class="hint">
+        Ask about this board's firmware. Answers about register maps, timing and
+        electrical limits are pulled from the indexed datasheets and cited by page.
+        Try: <code>how do I bring up the sensor on I2C1?</code> ·
+        <code>what does CTRL_MEAS do?</code> ·
+        <code>review my ISR for race conditions</code>
+      </div>
+    </div>
+  </div>
+  <form id="form">
+    <textarea id="input" placeholder="Ask about your firmware…  (Enter to send, Shift+Enter for newline)" autofocus></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</main>
+
+<script>
+const log = document.getElementById('log');
+const form = document.getElementById('form');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+let sessionId = null;
+
+function esc(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Minimal markdown: fenced code, inline code, bold, paragraphs.
+function render(md) {
+  const parts = md.split(/```/);
+  let html = '';
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) {
+      const nl = part.indexOf('\n');
+      const body = nl >= 0 ? part.slice(nl + 1) : part;
+      html += '<pre><code>' + esc(body.replace(/\n$/, '')) + '</code></pre>';
+    } else {
+      html += esc(part)
+        .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n{2,}/g, '</p><p>')
+        .replace(/\n/g, '<br>');
+      html = '<p>' + html + '</p>';
+    }
+  });
+  return html;
+}
+
+function addMessage(who, cls) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + cls;
+  wrap.innerHTML = '<div class="who">' + who + '</div><div class="body"></div>';
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+  return wrap.querySelector('.body');
+}
+
+async function loadStatus() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    document.getElementById('proj').textContent = s.project;
+    document.getElementById('root').textContent = s.root;
+    const p = s.project_profile, b = s.board, side = [];
+
+    side.push('<h2>Board</h2>');
+    if (b.name) {
+      side.push('<div class="kv"><span>name</span> ' + esc(b.name) + '</div>');
+      if (b.mcu) side.push('<div class="kv"><span>mcu</span> ' + esc(b.mcu) + '</div>');
+      b.components.forEach(c => side.push('<div class="kv">· ' + esc(c) + '</div>'));
+      b.warnings.forEach(w => side.push('<div class="warn">⚠ ' + esc(w) + '</div>'));
+    } else {
+      side.push('<div class="kv"><span>no board.yaml — run <code>fwcopilot board init</code></span></div>');
+    }
+
+    side.push('<h2>Project</h2>');
+    const row = (label, arr) => arr && arr.length
+      ? '<div class="kv"><span>' + label + '</span> ' + arr.map(esc).join(', ') + '</div>' : '';
+    side.push(row('build', p.build_systems));
+    side.push(row('toolchain', p.toolchains));
+    side.push(row('rtos', p.rtos.length ? p.rtos : ['bare-metal']));
+    side.push(row('mcu', p.mcu_hints));
+    if (p.peripherals.length) {
+      side.push('<h2>Peripherals</h2>');
+      side.push(p.peripherals.map(x => '<span class="chip">' + esc(x) + '</span>').join(''));
+    }
+
+    side.push('<h2>Datasheets (' + s.datasheets.length + ')</h2>');
+    if (!s.datasheets.length) {
+      side.push('<div class="kv"><span>none indexed</span></div>');
+    }
+    s.datasheets.forEach(d => side.push(
+      '<div class="ds"><b>' + esc(d.part || '') + '</b>' +
+      (d.component ? ' <span>[' + esc(d.component) + ']</span>' : '') +
+      '<br><span>' + d.pages + ' pages</span></div>'
+    ));
+
+    side.push('<h2>Index</h2>');
+    side.push('<div class="kv"><span>' + s.index.source_files + ' files · ' +
+      s.index.chunks + ' chunks · ' + s.index.registers + ' registers</span></div>');
+    side.push('<h2>Session</h2>');
+    side.push('<div class="kv"><span>model</span> ' + esc(s.model) + '</div>');
+    side.push('<div class="kv"><span>writes</span> ' +
+      (s.permissions.write ? 'enabled' : 'read-only') + '</div>');
+    document.getElementById('side').innerHTML = side.join('');
+  } catch (e) {
+    document.getElementById('side').innerHTML = '<div class="warn">status unavailable</div>';
+  }
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  sendBtn.disabled = true;
+  addMessage('you', 'user').textContent = message;
+
+  const body = addMessage('fwcopilot', 'assistant');
+  let text = '';
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message, session_id: sessionId}),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop();
+
+      for (const frame of frames) {
+        const line = frame.trim();
+        if (!line.startsWith('data:')) continue;
+        const ev = JSON.parse(line.slice(5).trim());
+
+        if (ev.type === 'session') {
+          sessionId = ev.data.id;
+        } else if (ev.type === 'text_delta') {
+          text += ev.text;
+          body.innerHTML = render(text);
+          log.scrollTop = log.scrollHeight;
+        } else if (ev.type === 'tool_use') {
+          const d = ev.data.query || ev.data.path || ev.data.name || ev.data.note || '';
+          const div = document.createElement('div');
+          div.className = 'tool';
+          div.innerHTML = '<b>' + esc(ev.name) + '</b> ' + esc(String(d).slice(0, 90));
+          body.appendChild(div);
+          log.scrollTop = log.scrollHeight;
+        } else if (ev.type === 'tool_result' && ev.text) {
+          const div = document.createElement('div');
+          div.className = 'tool' + (ev.data.is_error ? ' err' : '');
+          div.textContent = '↳ ' + ev.text;
+          body.appendChild(div);
+        } else if (ev.type === 'error') {
+          const div = document.createElement('div');
+          div.className = 'err-box';
+          div.textContent = ev.text;
+          body.appendChild(div);
+        }
+      }
+    }
+  } catch (err) {
+    const div = document.createElement('div');
+    div.className = 'err-box';
+    div.textContent = 'Connection failed: ' + err;
+    body.appendChild(div);
+  }
+  sendBtn.disabled = false;
+  input.focus();
+});
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+loadStatus();
+</script>
+</body>
+</html>
