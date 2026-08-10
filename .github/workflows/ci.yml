@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: lint + types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[server,dev]"
+      - name: ruff (lint)
+        run: ruff check fwcopilot tests
+      - name: ruff (format)
+        run: ruff format --check fwcopilot tests
+      - name: mypy
+        run: mypy fwcopilot
+
+  test:
+    name: test (py${{ matrix.python-version }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          # The tool is used on engineers' laptops, so keep the other two
+          # platforms honest on the current stable Python.
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[server,dev]"
+      - name: pytest
+        run: pytest --cov=fwcopilot --cov-report=xml --cov-report=term-missing
+      - name: Upload coverage
+        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: warn
+
+  smoke:
+    name: end-to-end smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[server,dev]"
+      - name: init, index, lint, scaffold and compile the generated firmware
+        run: |
+          set -euxo pipefail
+          work=$(mktemp -d)
+          cd "$work"
+          mkdir -p src datasheets
+          cat > src/main.c <<'EOF'
+          #include "stm32f4xx.h"
+          #include <stdint.h>
+          static volatile uint32_t g_ticks;
+          void SysTick_Handler(void) { g_ticks++; }
+          int main(void) { HAL_I2C_Init(&hi2c1); for (;;) { __WFI(); } }
+          EOF
+          cat > datasheets/acme.txt <<'EOF'
+          ACME1234 sensor
+          CHIP_ID   0xD0  R    Chip identification
+          CTRL_MEAS 0xF4  R/W  Oversampling and power mode
+          EOF
+          cat > board.yaml <<'EOF'
+          board: { name: ci-board }
+          mcu: { part: STM32F411, core: Cortex-M4F, flash_kb: 512, ram_kb: 128 }
+          buses:
+            - { name: I2C1, type: i2c, speed_hz: 400000, pins: { scl: PB6, sda: PB7 } }
+          components:
+            - ref: U2
+              part: ACME1234
+              bus: { name: I2C1, address: 0x76 }
+              datasheet: datasheets/acme.txt
+          pins:
+            - { pin: PB6, net: I2C1_SCL }
+            - { pin: PB7, net: I2C1_SDA }
+          EOF
+          fwcopilot init . --name ci-project
+          fwcopilot index
+          fwcopilot board check
+          fwcopilot search "oversampling" | grep -q CTRL_MEAS
+          fwcopilot regs ACME1234 --out drivers/acme_regs.h
+          grep -q "ACME1234_REG_CTRL_MEAS" drivers/acme_regs.h
+          fwcopilot lint
+          fwcopilot scaffold --target cmsis-bare --out gen
+          grep -q "0x76u" gen/board_pins.h
+          # The generated firmware must compile cleanly.
+          cd gen && gcc -fsyntax-only -std=c11 -Wall -Wextra -I. -Idrivers drivers/*.c startup.c main.c
+      - name: doctor and probes
+        run: |
+          set -euxo pipefail
+          cd "$(mktemp -d)"
+          fwcopilot init . >/dev/null
+          fwcopilot index >/dev/null
+          fwcopilot doctor || true   # warnings are expected on a bare runner
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from fwcopilot.config import load_config
+          from fwcopilot.server import create_app
+          client = TestClient(create_app(load_config(), auth_token="ci-token"))
+          assert client.get("/healthz").json()["status"] == "ok"
+          assert client.get("/api/status").status_code == 401
+          assert client.get("/api/status", headers={"Authorization": "Bearer ci-token"}).status_code == 200
+          print("server probes ok")
+          PY
+
+  package:
+    name: build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - name: Validate metadata
+        run: twine check dist/*
+      - name: Install the wheel in a clean environment
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          /tmp/clean/bin/fwcopilot --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  docker:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: fwcopilot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the image
+        run: docker run --rm fwcopilot:ci --version

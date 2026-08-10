@@ -1,0 +1,32 @@
+# Run fwcopilot against a firmware project on this machine.
+#
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#   export FWCOPILOT_PROJECT=/path/to/your/firmware
+#   export FWCOPILOT_AUTH_TOKEN=$(openssl rand -hex 24)
+#   docker compose up
+#
+# Then open http://127.0.0.1:8765 and paste the token when prompted.
+
+services:
+  fwcopilot:
+    build: .
+    image: fwcopilot:latest
+    ports:
+      # Bound to loopback: publish more widely only behind a TLS reverse proxy.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      # The firmware project. Read-write so `--allow-write` can be used; drop
+      # `:rw` to `:ro` for a strictly read-only assistant.
+      - ${FWCOPILOT_PROJECT:-./}:/workspace:rw
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      FWCOPILOT_AUTH_TOKEN: ${FWCOPILOT_AUTH_TOKEN:-}
+      FWCOPILOT_MODEL: ${FWCOPILOT_MODEL:-claude-opus-5}
+      FWCOPILOT_LOG_FORMAT: json
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1g
